@@ -17,6 +17,59 @@ def print_header():
     print("=" * 80)
     print()
 
+def combine_existing_subtitles():
+    """Combine existing subtitle files into a single text document."""
+    print_header()
+    print("COMBINE EXISTING SUBTITLE FILES")
+    print("This will merge your existing subtitle files into a single searchable document.")
+    print()
+    
+    # Ask for the directory containing subtitles
+    print("Enter the directory containing your subtitle files:")
+    subtitle_dir = input("> ").strip()
+    
+    if not os.path.isdir(subtitle_dir):
+        print(f"\nError: '{subtitle_dir}' is not a valid directory.")
+        input("\nPress Enter to return to the main menu...")
+        return
+    
+    # Ask for output file
+    print("\nWhere would you like to save the merged file?")
+    print("1. In the same directory as the subtitle files")
+    print("2. Specify a different location")
+    
+    output_choice = input("\nEnter your choice (1-2): ")
+    
+    if output_choice == "1":
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(subtitle_dir, f"all_subtitles_merged_{timestamp}.txt")
+    elif output_choice == "2":
+        print("\nEnter the path for the output file:")
+        output_file = input("> ").strip()
+    else:
+        print("Invalid choice. Using the subtitle directory.")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = os.path.join(subtitle_dir, f"all_subtitles_merged_{timestamp}.txt")
+    
+    # Ask if they want clean text only
+    print("\nHow would you like the output formatted?")
+    print("1. Clean text only (just the subtitle content)")
+    print("2. Include video information and file paths")
+    
+    format_choice = input("\nEnter your choice (1-2): ")
+    clean_text_only = format_choice == "1"
+    
+    # Merge the files
+    merged_count = merge_subtitles(subtitle_dir, output_file, clean_text_only)
+    
+    if merged_count > 0:
+        print(f"\nSuccessfully merged {merged_count} subtitle files into:")
+        print(f"{os.path.abspath(output_file)}")
+    else:
+        print("\nNo subtitle files were found or merged.")
+    
+    input("\nPress Enter to return to the main menu...")
+
 def check_dependencies():
     """Check if yt-dlp and ffmpeg are installed and install if needed."""
     yt_dlp_installed = True
@@ -89,55 +142,126 @@ def clean_filename(filename):
     return cleaned
 
 def parse_srt_to_text(file_path):
-    """Parse an SRT file and extract just the text without timestamps."""
+    """Parse an SRT/VTT file and extract just the text without timestamps or formatting codes."""
     try:
         with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
             content = file.read()
-            
-        # Remove SRT timestamps and numbers
-        lines = content.split('\n')
-        parsed_text = []
         
-        i = 0
-        while i < len(lines):
-            # Skip blank lines
-            if not lines[i].strip():
-                i += 1
-                continue
-                
-            # Try to identify SRT index numbers
-            if lines[i].strip().isdigit():
-                i += 1  # Skip the number line
-                
-                # Skip timestamp line if it exists (contains --> pattern)
-                if i < len(lines) and '-->' in lines[i]:
-                    i += 1
-                    
-                # Collect subtitle text until we hit a blank line or another number
-                text_lines = []
-                while i < len(lines) and lines[i].strip() and not lines[i].strip().isdigit():
-                    text_lines.append(lines[i].strip())
-                    i += 1
-                    
-                if text_lines:
-                    parsed_text.append(' '.join(text_lines))
+        # First attempt to identify the format and use appropriate processing
+        if file_path.endswith('.vtt'):
+            return parse_vtt_to_text(content)
+        elif file_path.endswith('.srt'):
+            return parse_srt_content(content)
+        else:
+            # Try both methods and use the one that produces better results
+            srt_result = parse_srt_content(content)
+            vtt_result = parse_vtt_to_text(content)
+            
+            # Choose the result with fewer timing markers and formatting codes
+            if len(re.findall(r'<\d+:\d+:\d+.\d+>', srt_result)) < len(re.findall(r'<\d+:\d+:\d+.\d+>', vtt_result)):
+                return srt_result
             else:
-                # If the format is irregular, just add the line
-                if lines[i].strip() and '-->' not in lines[i]:
-                    parsed_text.append(lines[i].strip())
-                i += 1
-                
-        return '\n'.join(parsed_text)
+                return vtt_result
     except Exception as e:
         return f"[Error parsing file: {str(e)}]"
 
-def merge_subtitles(output_dir, final_output_file):
+def parse_srt_content(content):
+    """Parse SRT content to clean text."""
+    # Remove SRT timestamps and numbers
+    lines = content.split('\n')
+    parsed_text = []
+    
+    i = 0
+    while i < len(lines):
+        # Skip blank lines
+        if not lines[i].strip():
+            i += 1
+            continue
+            
+        # Try to identify SRT index numbers
+        if lines[i].strip().isdigit():
+            i += 1  # Skip the number line
+            
+            # Skip timestamp line if it exists (contains --> pattern)
+            if i < len(lines) and '-->' in lines[i]:
+                i += 1
+                
+            # Collect subtitle text until we hit a blank line or another number
+            text_lines = []
+            while i < len(lines) and lines[i].strip() and not lines[i].strip().isdigit():
+                # Clean line of any HTML/XML tags and timing codes
+                clean_line = re.sub(r'<[^>]+>', ' ', lines[i])
+                clean_line = re.sub(r'\d+:\d+:\d+\.\d+', '', clean_line)
+                clean_line = re.sub(r'\s+', ' ', clean_line).strip()
+                
+                if clean_line:
+                    text_lines.append(clean_line)
+                i += 1
+                
+            if text_lines:
+                parsed_text.append(' '.join(text_lines))
+        else:
+            # If the format is irregular, just add the clean line
+            if lines[i].strip() and '-->' not in lines[i]:
+                clean_line = re.sub(r'<[^>]+>', ' ', lines[i])
+                clean_line = re.sub(r'\d+:\d+:\d+\.\d+', '', clean_line)
+                clean_line = re.sub(r'\s+', ' ', clean_line).strip()
+                
+                if clean_line:
+                    parsed_text.append(clean_line)
+            i += 1
+    
+    return '\n'.join(parsed_text)
+
+def parse_vtt_to_text(content):
+    """Parse WebVTT content to clean text."""
+    # Remove WebVTT header
+    if content.startswith('WEBVTT'):
+        content = re.sub(r'^WEBVTT.*?\n\n', '', content, flags=re.DOTALL)
+    
+    # Extract text from VTT format
+    result = []
+    
+    # Process each subtitle block
+    blocks = re.split(r'\n\n+', content)
+    for block in blocks:
+        lines = block.split('\n')
+        if not lines:
+            continue
+            
+        # Skip timing lines and headers
+        text_lines = []
+        for line in lines:
+            # Skip lines with timestamps
+            if re.search(r'\d+:\d+:\d+', line) or re.search(r'\d+:\d+\.\d+', line) or '-->' in line:
+                continue
+                
+            # Skip VTT cue settings
+            if line.strip() and line.strip()[0] in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+                continue
+                
+            # Clean formatting tags and timing markers
+            clean_line = re.sub(r'<[^>]+>', ' ', line)  # Remove HTML/XML tags
+            clean_line = re.sub(r'<\d+:\d+:\d+\.\d+>', '', clean_line)  # Remove timing markers
+            clean_line = re.sub(r'\d+:\d+:\d+\.\d+', '', clean_line)  # Remove additional timing
+            clean_line = re.sub(r'\s+', ' ', clean_line).strip()  # Normalize whitespace
+            
+            if clean_line:
+                text_lines.append(clean_line)
+        
+        if text_lines:
+            result.append(' '.join(text_lines))
+    
+    return '\n'.join(result)
+
+def merge_subtitles(output_dir, final_output_file, clean_text_only=False):
     """
     Merge all subtitle files in the output directory into a single text file.
     
     Args:
         output_dir (str): Directory containing subtitle files
         final_output_file (str): Path for the merged output file
+        clean_text_only (bool): If True, only include subtitle text without headers or file info
     
     Returns:
         int: Number of subtitle files merged
@@ -172,15 +296,21 @@ def merge_subtitles(output_dir, final_output_file):
                 filename = os.path.basename(srt_file)
                 video_title = os.path.splitext(filename)[0]
                 
-                # Add divider and video title
-                output.write(f"\n\n{'=' * 80}\n")
-                output.write(f"VIDEO: {video_title}\n")
-                output.write(f"FILE: {srt_file}\n")
-                output.write(f"{'=' * 80}\n\n")
-                
                 # Extract text from subtitle file
                 subtitle_text = parse_srt_to_text(srt_file)
-                output.write(subtitle_text)
+                
+                if clean_text_only:
+                    # For clean text only, just add the subtitle content with a single blank line between files
+                    if i > 0:  # Add a separator blank line between files, but not before the first one
+                        output.write("\n\n")
+                    output.write(subtitle_text)
+                else:
+                    # Add divider and video title for regular mode
+                    output.write(f"\n\n{'=' * 80}\n")
+                    output.write(f"VIDEO: {video_title}\n")
+                    output.write(f"FILE: {srt_file}\n")
+                    output.write(f"{'=' * 80}\n\n")
+                    output.write(subtitle_text)
                 
                 count += 1
                 
@@ -199,7 +329,7 @@ def merge_subtitles(output_dir, final_output_file):
     print(f"  {os.path.abspath(final_output_file)}")
     return count
 
-def download_subtitles(url, is_channel=False, language="en", output_dir=None, format="srt", include_auto=True, merge_to_single_file=True, skip_conversion=False):
+def download_subtitles(url, is_channel=False, language="en", output_dir=None, format="srt", include_auto=True, merge_to_single_file=True, skip_conversion=False, clean_text_only=False):
     """
     Download subtitles from YouTube video or channel.
     
@@ -212,6 +342,7 @@ def download_subtitles(url, is_channel=False, language="en", output_dir=None, fo
         include_auto (bool): Whether to include auto-generated subtitles
         merge_to_single_file (bool): Whether to merge all subtitles into a single file
         skip_conversion (bool): Whether to skip subtitle format conversion (if ffmpeg isn't available)
+        clean_text_only (bool): If True, only include subtitle text in the merged file without headers/info
     """
     # Create timestamp for the run
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -318,7 +449,16 @@ def download_subtitles(url, is_channel=False, language="en", output_dir=None, fo
             
             # Merge subtitles if requested (for channels)
             if merge_to_single_file and subtitle_count > 0:
-                merged_count = merge_subtitles(output_dir, final_output_file)
+                # Ask if they want clean text only when merging after download
+                clean_text_only = False
+                if is_channel:
+                    print("\nHow would you like the merged subtitles formatted?")
+                    print("1. Clean text only (just the subtitle content)")
+                    print("2. Include video information and file paths")
+                    format_choice = input("\nEnter your choice (1-2): ")
+                    clean_text_only = format_choice == "1"
+                
+                merged_count = merge_subtitles(output_dir, final_output_file, clean_text_only)
                 if merged_count > 0:
                     print(f"\nSUMMARY:")
                     print(f"- Downloaded {subtitle_count} subtitle files")
@@ -486,10 +626,11 @@ def show_main_menu():
         print("MAIN MENU:")
         print()
         print("1. Download YouTube Subtitles")
-        print("2. About This Tool")
-        print("3. Exit")
+        print("2. Combine Existing Subtitle Files")
+        print("3. About This Tool")
+        print("4. Exit")
         
-        choice = input("\nEnter your choice (1-3): ")
+        choice = input("\nEnter your choice (1-4): ")
         
         if choice == "1":
             # Check for required dependencies
@@ -538,6 +679,9 @@ def show_main_menu():
                                 skip_conversion=not ffmpeg_available)
         
         elif choice == "2":
+            combine_existing_subtitles()
+            
+        elif choice == "3":
             print_header()
             print("ABOUT THIS TOOL:")
             print()
@@ -550,11 +694,12 @@ def show_main_menu():
             print("- Support for multiple languages and subtitle formats")
             print("- Option to include auto-generated subtitles")
             print("- Merge all channel subtitles into a single searchable text file")
+            print("- Combine existing subtitle files into one document")
             print("- Customizable output directory")
             print()
             input("Press Enter to return to the main menu...")
         
-        elif choice == "3":
+        elif choice == "4":
             print("\nThank you for using YouTube Subtitle Downloader!")
             break
         
