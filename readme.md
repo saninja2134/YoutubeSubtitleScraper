@@ -1,4 +1,4 @@
-# YouTube Subtitle Downloader
+# YouTube Subtitle Scraper
 
 An interactive command-line tool that downloads subtitles from YouTube videos or entire channels and can merge them into a single searchable document.
 
